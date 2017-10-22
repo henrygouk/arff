@@ -1,0 +1,9 @@
+{
+	"name": "arff",
+	"authors": [
+		"Henry Gouk"
+	],
+	"description": "An ARFF (Attribute Relation File Format) loader.",
+	"copyright": "Copyright © 2017, Henry Gouk",
+	"license": "Boost"
+}
