@@ -5,6 +5,7 @@ import std.array;
 import std.conv;
 import std.csv;
 import std.exception;
+import std.file;
 import std.math;
 import std.range;
 import std.stdio;
@@ -187,8 +188,14 @@ private void skip(R)(ref R line)
 
 ARFF loadARFF(string path)
 {
-    auto f = File(path, "r");
-    int numLabels = int.min;
+    string content = readText(path);
+
+    return parseARFF(content);
+}
+
+ARFF parseARFF(string content)
+{
+    int numLabels = 1;
     bool swapLabels;
     bool dataMode = false;
     string name;
@@ -196,10 +203,18 @@ ARFF loadARFF(string path)
     Attribute[] attribs;
     float[][] vals;
 
-    auto inputRange = f.byLineCopy.map!strip;
+    auto inputRange = content
+                     .splitter("\n")
+                     .map!strip
+                     .filter!(x => x.length > 0);
 
     foreach(l; inputRange)
     {
+        if(l.front == '%')
+        {
+            continue;
+        }
+
         if(!dataMode && l.length > 0 && l.front == '@')
         {
             if(l.consume("@relation"))
@@ -224,20 +239,39 @@ ARFF loadARFF(string path)
                 auto args = name.splitter().array;
                 getopt(args, config.passThrough, "C", &numLabels);
 
-                swapLabels = numLabels > 0;
-                numLabels = numLabels == int.min ? 1 : abs(numLabels);
+                swapLabels = numLabels < 0;
+                numLabels = abs(numLabels);
             }
             else if(l.consume("@attribute"))
             {
                 enforce(name != "", "The @relation statement must occur before any @attibute statements");
 
                 l.skip();
-                auto attName = l.consumeWord;
+                string attName;
+                
+                if(l.front == '"' || l.front == '\'')
+                {
+                    auto q = l.front;
+                    l.popFront();
+
+                    while(l.front != q)
+                    {
+                        attName ~= l.front;
+                        l.popFront();
+                    }
+
+                    l.popFront();
+                }
+                else
+                {
+                    attName = l.consumeWord;
+                }
+
                 l.skip();
 
                 auto attSpec = l.strip;
 
-                if(attSpec.asLowerCase.equal("numeric") || attSpec.asLowerCase.equal("real"))
+                if(["numeric", "real", "integer"].canFind(attSpec.asLowerCase().to!string))
                 {
                     attribs ~= Attribute(attName);
                 }
@@ -290,12 +324,67 @@ ARFF loadARFF(string path)
             if(swapLabels)
             {
                 instVals = instVals[numLabels .. $] ~ instVals[0 .. numLabels];
-                attribs = attribs[numLabels .. $] ~ attribs[0 .. numLabels];
             }
 
             vals ~= instVals;
         }
     }
+
+    if(swapLabels)
+    {
+        attribs = attribs[numLabels .. $] ~ attribs[0 .. numLabels];
+    }
     
     return ARFF(name, attribs, vals, cast(uint)numLabels);
+}
+
+unittest
+{
+    string content = `
+        @relation arffdata
+
+        @attribute "some attribute" numeric
+        @attribute 'label' REAL
+
+        % Now the data starts!
+        @data
+        1,2
+        3,4
+        5,6
+
+    `;
+
+    auto arff = parseARFF(content);
+
+    assert(arff.name == "arffdata");
+    assert(arff.attributes.length == 2);
+    assert(arff.attributes[0].name == "some attribute");
+    assert(arff.attributes[1].name == "label");
+    assert(arff.values.equal([
+        [1.0f, 2.0f],
+        [3.0f, 4.0f],
+        [5.0f, 6.0f]
+    ]));
+}
+
+unittest
+{
+    // The "-C -2" in the relation name is used to indicate the first two columns in the relation are the labels
+    string content = `
+        @relation "relname -C -2"
+        @attribute label1 {0,1}
+        @attribute label2 {0,1}
+        @attribute attrib1 numeric
+        @attribute attrib2 numeric
+        @data
+        0,1,5.2,4.3
+        1,0,3.6,8.1
+    `;
+
+    auto arff = parseARFF(content);
+
+    assert(arff.values.equal([
+        [5.2f, 4.3f, 0.0f, 1.0f],
+        [3.6f, 8.1f, 1.0f, 0.0f]
+    ]));
 }
